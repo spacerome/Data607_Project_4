@@ -1,0 +1,270 @@
+---
+title: "Project 4: Document Classification"
+author: "Anthony Josue Roman"
+format: html
+editor: visual
+---
+
+# Introduction
+
+Document classification is a fundamental task in natural language processing, finding its applications in a number of real-world scenarios. Other than spam detection in e-mails, document classification can be used to categorize customer feedback for sentiment analysis, prioritize help desk queries based on urgency, or even filter inappropriate content on social media platforms. These applications highlight the power of automated classification in streamlining workflows and improving decision-making processes.
+
+Document classification is essentially based on the capability of using "training" data-a corpus of pre-classified documents-to make predictions about new, unseen "test" data. For instance, we can use a labeled dataset of spam (undesirable) versus ham (non-spam) e-mails to train a model that can identify the class of incoming messages in order to enhance e-mail filtering systems.
+
+For this project, we will be working with a spam/ham dataset in order to develop and evaluate a classification model. We can use the model to predict the class of new documents, either from the withheld portion of the training dataset or from an external source such as your personal spam folder, in order to explore the effectiveness of machine learning techniques in document classification. The [SpamAssassin public corpus](https://spamassassin.apache.org/old/publiccorpus/) provides a very good starting point for this exploration.
+
+```{r include=FALSE}
+library(readr)
+library(RCurl)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(stringi)
+library(stats) 
+library(magrittr)
+library(R.utils)
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(topicmodels)
+library(SnowballC)                    
+library(e1071)                    
+library(data.table)
+library(quanteda)
+library(naivebayes)
+library(httr)
+library(caTools)
+library(caret)
+```
+
+This assignment will use the following packages:
+
+```{r eval=FALSE}
+library(readr)
+library(RCurl)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(tidytext)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(stringi)
+library(stats) 
+library(magrittr)
+library(R.utils)
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(topicmodels)
+library(SnowballC)                    
+library(e1071)                    
+library(data.table)
+library(quanteda)
+library(naivebayes)
+library(httr)
+library(caTools)
+library(caret)
+```
+
+The following packages contain the following:
+
+-   `readr`: Efficiently reads rectangular data such as CSV files.
+-   `RCurl`: Provides tools for accessing data on the web using URLs.
+-   `stringr`: Simplifies string manipulation with consistent and easy-to-use functions.
+-   `dplyr`: Enables easy and intuitive data manipulation using a grammar of data transformation.
+-   `tidyr`: Helps in reshaping and tidying datasets into a consistent, tidy format.
+-   `tidyverse`: A collection of R packages for data science, including ggplot2, dplyr, tidyr, and more.
+-   `tidytext`: Offers tools for text mining and analysis, including tokenization and sentiment analysis.
+-   `ggplot2`: Creates customizable and visually appealing plots using the layered grammar of graphics.
+-   `knitr`: Used to knit .Rmd files into reports or presentations.
+-   `kableExtra`: Extends the functionality of kable() for creating well-formatted tables.
+-   `purrr`: Offers functional programming tools to work with lists and vectors efficiently.
+-   `stringi`: Provides powerful tools for advanced string manipulation, including Unicode support.
+-   `stats`: Base R package with statistical functions and methods.
+-   `magrittr`: Provides the %\>% pipe operator, making code more readable.
+-   `R.utils`: Contains utility functions for file handling and system operations.
+-   `tm`: Used for text mining and text preprocessing tasks.
+-   `wordcloud`: Creates word clouds for visualizing text data.
+-   `wordcloud2`: Generates interactive and HTML-based word clouds.
+-   `topicmodels`: Offers tools for topic modeling, including Latent Dirichlet Allocation (LDA).
+-   `SnowballC`: Provides text stemming algorithms for multiple languages.
+-   `e1071`: Implements machine learning algorithms like SVMs and Naive Bayes.
+-   `data.table`: High-performance tools for data manipulation and aggregation, especially for large datasets.
+-   `quanteda`: Focuses on quantitative text analysis.
+-   `naivebayes`: Implements the Naive Bayes algorithm for classification tasks.
+-   `httr`: Allows working with HTTP protocols and APIs.
+-   `caTools`: Includes tools for data splitting, cross-validation, and running moving averages.
+-   `caret`: Offers a unified framework for training and tuning machine learning models.
+
+# The Data
+
+## Obtaining the Data
+
+The following data will be extracted from the [SpamAssassin public corpus](https://spamassassin.apache.org/old/publiccorpus/). The following code block below will obtain the spam and ham tar-zipped files from the url provided from the corpus. It will also unzip the files into a directory named `spamham`. Within the `spamham` directory there are two sub-directories named `easy_ham` and `spam2` collectively.
+
+**Note**: The current directory used will be within the current file directory the `.qmd` file is located.
+
+```{r spamnham}
+
+hamurl <- "https://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2"
+spamurl <- "https://spamassassin.apache.org/old/publiccorpus/20050311_spam_2.tar.bz2"
+
+hamfile <- basename(hamurl)
+
+if(!file.exists(hamfile)){
+  download.file(hamurl, hamfile) 
+  untar(hamfile, exdir= "spamham")
+}
+
+spamfile <- basename(spamurl)
+
+if(!file.exists(spamfile)){
+  download.file(spamurl, spamfile)
+  untar(spamfile, exdir= "spamham")
+}
+
+hamdir <- "./spamham/easy_ham/"
+spamdir <- "./spamham/spam_2/"
+
+hsdf <- function(path, tag){
+  hsFiles <- list.files(path=path, full.names=TRUE, recursive=TRUE)
+  hsEmail <- lapply(hsFiles, function(x) {
+    hsBody <- read_file(x)
+    }) # Ham & Spam Data Frame
+  
+  hsEmail <- unlist(hsEmail)
+  hsData <- as.data.frame(hsEmail)
+  hsData$tag <- tag
+  return (hsData)
+}
+
+hamFiles <- hsdf(hamdir, tag="ham") 
+spamFiles <- hsdf(spamdir, tag="spam")
+
+spamhamdf <- rbind(hamFiles, spamFiles)
+table(spamhamdf$tag)
+
+```
+
+After extracting the files, the dataframe `spamhamdf` will be scrambled for this project:
+
+```{r spamhamscramble}
+
+spamhamdf <- spamhamdf[sample(c(1:length(spamhamdf)))]
+
+```
+
+## Data Preparation
+
+After extracting the data, the data needs to be prepared for processing and visualization. The `tm` package will be used for the text data to clean any "noise" that may impact the analysis. The following code block will remove any HTML tags, numbers, punctuation, and whitespace from the emails. The emails will be converted to lowercase and tokenized into paragraphs. Stop words will be removed from the text data to reduce noise. The data will then be converted into a document-term matrix for further analysis.
+
+```{r datapreparation}
+
+spamhamdf <- spamhamdf %>%
+  mutate(hsEmail = str_remove_all(hsEmail, pattern = "<.*?>")) %>%
+  mutate(hsEmail = str_remove_all(hsEmail, pattern = "[:digit:]")) %>%
+  mutate(hsEmail = str_remove_all(hsEmail, pattern = "[:punct:]")) %>%
+  mutate(hsEmail = str_remove_all(hsEmail, pattern = "[\\r\\n\\t]+")) %>%
+  mutate(hsEmail = str_to_lower(hsEmail)) %>%
+  unnest_tokens(output=text, input=hsEmail, token = "paragraphs", format = "text") %>%
+  anti_join(stop_words, by=c("text"="word"))
+
+cc <- VCorpus(VectorSource(spamhamdf$text))
+cc <- tm_map(cc, removeNumbers)
+cc <- tm_map(cc, removePunctuation)
+cc <- tm_map(cc, stripWhitespace)
+cc <- tm_map(cc, removeWords, stopwords("english"))
+cc <- tm_map(cc, stemDocument)
+cc <- tm_map(cc, content_transformer(stringi::stri_trans_tolower))
+
+shc <- cc[sample(c(1:length(cc)))]
+
+sht <- removeSparseTerms(DocumentTermMatrix(shc, control = list(stemming = TRUE)), 1-(10/length(shc)))
+
+ct <- function(x){
+  y <- ifelse(x>0, 1,0)
+  y <- factor(y, levels = c(0,1), labels = c(0,1))
+  y
+}
+
+dim(sht)
+
+```
+
+```{r shmatrix}
+
+hsdtm <- sht %>%
+  as.matrix() %>%
+  as.data.frame() %>%
+  sapply(., as.numeric) %>%
+  as.data.frame() %>%
+  mutate(class = spamhamdf$tag) %>%
+  select(class, everything())
+
+hsdtm$class <- as.factor(hsdtm$class)
+str(hsdtm$class)
+
+```
+
+## Data Evaluation
+
+The following code block will evaluate the data by displaying the first few rows of the dataset, the structure of the dataset, and the class distribution of the dataset.
+
+```{r testing}
+
+tt <- floor(0.8 * nrow(hsdtm))
+
+set.seed(1776) 
+
+ttinit <- sample(seq_len(nrow(hsdtm)), size = tt)
+
+trdtm <- hsdtm[ttinit,] # Training
+tedtm <- hsdtm[-ttinit,] # Testing
+
+trcnt <- trdtm$class
+tecnt <- tedtm$class
+
+prop.table(table(trcnt))
+
+m <- naiveBayes(trdtm, trcnt) # Model
+
+head(m$tables,3)
+
+p <- predict(m, tedtm) # Prediction
+
+table(p, actual = tedtm$class)
+
+a <- sum(p == tedtm$class) / length(tedtm$class) # Accuracy
+
+confusionMatrix(p, tecnt, positive = "spam", dnn = c("Prediction", "Actual"))
+
+```
+
+## Data Visualization
+
+The following codeblock will create word clouds for the entire corpus, spam, and ham categories. The word clouds will display the most frequent terms in the dataset, providing insights into the content of the emails.
+
+```{r wordclouds}
+
+suppressWarnings(wordcloud(shc, maxwords = 50, random.order = FALSE, min.freq = 1000, color = brewer.pal(8, "Dark2"))) # Corpus word cloud
+
+sc <- which(hsdtm$class == "spam") # Spam word cloud
+suppressWarnings(wordcloud(cc[sc], max.words = 50, random.order = FALSE, min.freq = 1000, color = brewer.pal(8, "Dark2")))
+
+hc <- which(hsdtm$class == "ham") # Ham wordcloud
+suppressWarnings(wordcloud(cc[hc], max.words = 50, random.order = FALSE, min.freq = 1000, color = brewer.pal(8, "Dark2")))
+
+```
+
+# Conclusion
+
+In this project, we explored the process of document classification using a spam/ham dataset from the SpamAssassin public corpus. We extracted the data, prepared it for analysis, and evaluated a classification model using the Naive Bayes algorithm. The model achieved an accuracy of `r a` on the test data, demonstrating its effectiveness in distinguishing between spam and ham emails. We also visualized the data using word clouds to gain insights into the most frequent terms in the corpus and the spam and ham categories. Overall, this project provided a hands-on experience in document classification and showcased the power of machine learning techniques in automating the categorization of text data.
